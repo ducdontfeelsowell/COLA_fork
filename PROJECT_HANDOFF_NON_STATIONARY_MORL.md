@@ -31,11 +31,12 @@ Current status:
   distribution helper are implemented in `environments/non_stationary.py`.
 - The wrapper is exported by `environments/__init__.py` and documented in
   `README.md`.
-- Twelve focused wrapper/scheduler tests pass.
+- Sixteen focused wrapper/scheduler/CLI integration tests pass.
 - No new dependency was added; the implementation respects
   `environmentV2.yml`.
-- **The wrapper is not yet connected to command-line arguments in `main.py`.**
-  At present, a caller must wrap the result of `gym.make(...)` manually.
+- `main.py` now applies the wrapper before constructing `SacAgent` when the
+  `--non-stationary` flag is present. Without that flag, the original
+  stationary environment object is preserved.
 - An end-to-end MuJoCo smoke test still needs to be run in the exact legacy
   environment. The current workstation has Gym 0.26.2, while this project
   requires Gym 0.15.3; the base MuJoCo constructor APIs are incompatible.
@@ -145,7 +146,8 @@ flowchart LR
 - Forces W&B offline mode and limits CPU math libraries to one thread.
 - Imports `environments`, which performs Gym registration as an import side
   effect.
-- Creates the base task with `gym.make(args.env_id)`.
+- Creates the base task with `gym.make(args.env_id)` and conditionally wraps it
+  through `wrap_environment_from_args(...)`.
 - Builds a configuration dictionary and starts `SacAgent.run(...)`.
 - Uses 500,000 environment steps in the current configuration, a replay size of
   one million, batch size 256, learning rate $3\times10^{-4}$, and 10,000
@@ -400,51 +402,63 @@ from the integers 100 through 500.
 
 ## 7. How environment initialization currently works
 
-The stationary path in `main.py` is:
+The shared initialization path in `main.py` is:
 
 ```python
 from environments import *  # registers task IDs
+from environments.non_stationary import (
+    add_non_stationary_arguments,
+    wrap_environment_from_args,
+)
 
 env = gym.make(args.env_id)
+env = wrap_environment_from_args(env, args, seed=args.seed)
 agent = SacAgent(env_id=args.env_id, env=env, log_dir=log_dir, **configs)
 ```
 
-The non-stationary path currently has to be written manually between
-`gym.make(...)` and `SacAgent(...)`:
+`wrap_environment_from_args` returns the exact base environment when
+`--non-stationary` is absent. When the flag is present, it constructs
+`NonStationaryEnv` before `SacAgent` reads the spaces, reward dimensions,
+horizon, and seed method.
 
-```python
-base_env = gym.make(args.env_id)
-env = NonStationaryEnv(
-    base_env,
-    parameter_paths="model.body_mass",
-    degree_distribution=NormalDistribution(1.0, 0.1, low=0.8, high=1.2),
-    interval_distribution=NormalDistribution(300, 75, low=100, high=500),
-    seed=args.seed,
-)
-agent = SacAgent(env_id=args.env_id, env=env, log_dir=log_dir, **configs)
+The implemented CLI supports:
+
+- repeatable `--ns-parameter` paths (default `model.body_mass`);
+- `--ns-degree-distribution normal|uniform`;
+- degree mean, standard deviation, low, and high values;
+- `--ns-interval-distribution normal|uniform`;
+- interval mean, standard deviation, low, and high values;
+- `--ns-change-mode scale|add|multiply|set`;
+- optional `--ns-reset-on-env-reset`.
+
+Non-stationary runs receive a `_NonStationary_...` W&B run-name suffix and are
+written below `logs/<env-id>/non_stationary/` so they do not overwrite the
+stationary run directory.
+
+Example:
+
+```bash
+python main.py \
+  --env_id MO-Ant-v2 \
+  --seed 1 \
+  --non-stationary \
+  --ns-parameter model.body_mass \
+  --ns-degree-distribution normal \
+  --ns-degree-mean 1.0 --ns-degree-std 0.1 \
+  --ns-degree-low 0.8 --ns-degree-high 1.2 \
+  --ns-interval-distribution normal \
+  --ns-interval-mean 300 --ns-interval-std 75 \
+  --ns-interval-low 100 --ns-interval-high 500 \
+  --ns-change-mode scale
 ```
 
-Wrapping before constructing `SacAgent` is important because the agent reads
-spaces, reward dimensions, horizons, and seeding methods from `env`. Gym's
-wrapper delegation preserves these attributes in the pinned legacy version.
-
-The recommended next implementation is to add explicit CLI/config options such
-as:
-
-- `--non-stationary`
-- `--ns-parameter model.body_mass`
-- `--ns-degree-distribution normal|uniform`
-- `--ns-degree-mean`, `--ns-degree-std`, `--ns-degree-low`, `--ns-degree-high`
-- `--ns-interval-mean`, `--ns-interval-std`, `--ns-interval-low`,
-  `--ns-interval-high`
-- `--ns-change-mode scale|add|multiply|set`
-
-The configuration should be logged and saved with checkpoints so experiments
-are reproducible.
+There are deliberately no separate non-stationary IDs because each base ID can
+be combined with different parameters and distributions. The authoritative
+base ID registrations are in `environments/__init__.py`.
 
 ## 8. Validation performed
 
-`tests/test_non_stationary.py` currently contains 12 passing unit tests. They
+`tests/test_non_stationary.py` currently contains 16 passing tests. They
 cover:
 
 - sampled intervals and offsets;
@@ -460,7 +474,10 @@ cover:
 - arbitrary custom update callbacks;
 - reproducible Gym-space degree samples;
 - scheduler time spanning episode resets by default;
-- restoration of original parameters and update metadata.
+- restoration of original parameters and update metadata;
+- stationary pass-through when the CLI flag is absent;
+- normal and uniform CLI construction paths;
+- invalid CLI interval validation.
 
 Validation command:
 
@@ -468,7 +485,7 @@ Validation command:
 python -B -m unittest discover -s tests -v
 ```
 
-Result on this workstation: **12 tests passed**.
+Result on this workstation: **16 tests passed**.
 
 An actual `MO-Ant-v2` construction was attempted locally, but the workstation
 has Gym 0.26.2. It failed inside the legacy base environment because Gym 0.26's
@@ -510,7 +527,9 @@ not be assumed to be a universally valid pip-only lockfile.
 
 The following items are not yet solved:
 
-1. **Training integration:** `main.py` has no non-stationary CLI/config path.
+1. **CLI expressiveness:** repeated parameter paths currently share one sampled
+   degree; independent per-parameter distributions remain available through
+   the Python API rather than the CLI.
 2. **Exact MuJoCo integration test:** wrapper tests use a lightweight mock;
    validation in Gym 0.15.3 + `mujoco-py` is pending.
 3. **Checkpoint continuation:** scheduler clock, RNG state, current parameter
@@ -549,8 +568,8 @@ Suggested order of work:
    `MO-Ant-v2` stationary smoke tests.
 2. Wrap `MO-Ant-v2` with a conservative body-mass distribution and verify
    actual model values, `sim.forward()`, transitions, and deterministic seeds.
-3. Add the non-stationary CLI/config block to `main.py` and log the complete
-   distribution specification.
+3. Run the documented `main.py --non-stationary` command and log the complete
+   distribution specification in the exact legacy MuJoCo runtime.
 4. Add scheduler and parameter state serialization to training checkpoints.
 5. Decide whether non-stationarity is hidden, observed, or partially observed;
    update replay structure accordingly.

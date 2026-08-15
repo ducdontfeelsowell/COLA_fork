@@ -490,9 +490,124 @@ class NonStationaryEnv(gym.Wrapper):
 NonStationaryWrapper = NonStationaryEnv
 
 
+def add_non_stationary_arguments(parser):
+    """Add the optional non-stationary environment CLI arguments to a parser."""
+    group = parser.add_argument_group("non-stationary environment")
+    group.add_argument(
+        "--non-stationary",
+        action="store_true",
+        help="wrap the selected Gym environment with NonStationaryEnv",
+    )
+    group.add_argument(
+        "--ns-parameter",
+        dest="ns_parameters",
+        action="append",
+        default=None,
+        help=(
+            "parameter path relative to env.unwrapped; repeat for multiple "
+            "parameters (default: model.body_mass)"
+        ),
+    )
+    group.add_argument(
+        "--ns-change-mode",
+        choices=NonStationaryEnv._CHANGE_MODES,
+        default="scale",
+        help="parameter update operation (default: scale)",
+    )
+    group.add_argument(
+        "--ns-degree-distribution",
+        choices=("normal", "uniform"),
+        default="normal",
+        help="distribution for alteration degrees (default: normal)",
+    )
+    group.add_argument("--ns-degree-mean", type=float, default=1.0)
+    group.add_argument("--ns-degree-std", type=float, default=0.1)
+    group.add_argument("--ns-degree-low", type=float, default=0.8)
+    group.add_argument("--ns-degree-high", type=float, default=1.2)
+    group.add_argument(
+        "--ns-interval-distribution",
+        choices=("normal", "uniform"),
+        default="normal",
+        help="distribution for inter-update timesteps (default: normal)",
+    )
+    group.add_argument("--ns-interval-mean", type=float, default=300.0)
+    group.add_argument("--ns-interval-std", type=float, default=75.0)
+    group.add_argument("--ns-interval-low", type=int, default=100)
+    group.add_argument("--ns-interval-high", type=int, default=500)
+    group.add_argument(
+        "--ns-reset-on-env-reset",
+        action="store_true",
+        help="restart the non-stationarity clock at every episode reset",
+    )
+    return parser
+
+
+def wrap_environment_from_args(env, args, seed=None):
+    """Return ``env`` unchanged or wrap it according to parsed CLI options."""
+    if not getattr(args, "non_stationary", False):
+        return env
+
+    degree_low = float(args.ns_degree_low)
+    degree_high = float(args.ns_degree_high)
+    if not np.isfinite(degree_low) or not np.isfinite(degree_high):
+        raise ValueError("non-stationary degree bounds must be finite")
+    if degree_low > degree_high:
+        raise ValueError("--ns-degree-low must not exceed --ns-degree-high")
+
+    interval_low = int(args.ns_interval_low)
+    interval_high = int(args.ns_interval_high)
+    if interval_low < 1:
+        raise ValueError("--ns-interval-low must be at least 1")
+    if interval_low > interval_high:
+        raise ValueError("--ns-interval-low must not exceed --ns-interval-high")
+
+    if args.ns_degree_distribution == "normal":
+        degree_distribution = NormalDistribution(
+            mean=args.ns_degree_mean,
+            standard_deviation=args.ns_degree_std,
+            low=degree_low,
+            high=degree_high,
+        )
+    else:
+        degree_distribution = gym.spaces.Box(
+            low=degree_low,
+            high=degree_high,
+            shape=(1,),
+            dtype=np.float32,
+        )
+
+    interval_offset = 0
+    if args.ns_interval_distribution == "normal":
+        interval_distribution = NormalDistribution(
+            mean=args.ns_interval_mean,
+            standard_deviation=args.ns_interval_std,
+            low=interval_low,
+            high=interval_high,
+        )
+    else:
+        interval_distribution = gym.spaces.Discrete(
+            interval_high - interval_low + 1
+        )
+        interval_offset = interval_low
+
+    parameter_paths = args.ns_parameters or ("model.body_mass",)
+    return NonStationaryEnv(
+        env,
+        parameter_paths=parameter_paths,
+        degree_distribution=degree_distribution,
+        interval_distribution=interval_distribution,
+        change_mode=args.ns_change_mode,
+        seed=seed,
+        interval_offset=interval_offset,
+        reset_schedule_on_env_reset=args.ns_reset_on_env_reset,
+    )
+
+
 __all__ = [
     "NormalDistribution",
     "NonStationaryEnv",
     "NonStationaryWrapper",
     "RandomizedScheduler",
+    "add_non_stationary_arguments",
+    "wrap_environment_from_args",
 ]

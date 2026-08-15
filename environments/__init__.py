@@ -5,6 +5,8 @@ from environments.non_stationary import (
     NonStationaryEnv,
     NonStationaryWrapper,
     RandomizedScheduler,
+    add_non_stationary_arguments,
+    wrap_environment_from_args,
 )
 
 

@@ -19,6 +19,10 @@ import numpy as np
 import random
 
 from environments import *
+from environments.non_stationary import (
+    add_non_stationary_arguments,
+    wrap_environment_from_args,
+)
 
 from agent import SacAgent
 def run():
@@ -79,6 +83,8 @@ def run():
 
     parser.add_argument('--consider_other', action='store_true', default=False)
 
+    add_non_stationary_arguments(parser)
+
     args = parser.parse_args()
 
     # Set CUDA_VISIBLE_DEVICES based on the flags
@@ -90,6 +96,11 @@ def run():
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda_device)
 
     name = "COLA_Consider_other_"+str(args.consider_other)+"_Regular_bar_"+ str(args.regular_bar)+"_Freq_"+str(args.old_Q_update_freq)+"_Regular_" + str(args.regular_alpha) + "_Critic_infos_"  + str(args.Critic_use_both) + "_"+str(args.use_avg)+"_"+str(args.Critic_use_s) + "_"+ str(args.Critic_use_a)+"_"+str(args.Policy_use_latent)+str(args.Policy_use_s)+"_"+str(args.Policy_use_w)+ "_Env_" + str(args.env_id)
+    if args.non_stationary:
+        name += "_NonStationary_{}_{}".format(
+            args.ns_degree_distribution,
+            args.ns_interval_distribution,
+        )
 
     # You can define configs in the external json or yaml file.
     configs = {
@@ -152,10 +163,27 @@ def run():
     }
 
     env = gym.make(args.env_id)
+    try:
+        env = wrap_environment_from_args(env, args, seed=args.seed)
+    except (AttributeError, TypeError, ValueError) as error:
+        env.close()
+        parser.error("cannot initialize non-stationary environment: {}".format(error))
+
+    if args.non_stationary:
+        print(
+            "Non-stationary environment enabled:",
+            "parameters={}".format(env.parameter_paths),
+            "degree_distribution={}".format(args.ns_degree_distribution),
+            "interval_distribution={}".format(args.ns_interval_distribution),
+            "next_update_step={}".format(env.next_update_step),
+        )
     configs['ref_point'] = [0.0,0.0]
 
+    log_parts = ['logs', args.env_id]
+    if args.non_stationary:
+        log_parts.append('non_stationary')
     log_dir = os.path.join(
-        'logs', args.env_id,
+        *log_parts,
         f'MOSAC_with_Ep_recorder-set{args.prefer}-buf{args.buf_num}-seed{args.seed}_freq{args.q_freq}')
     our_wandb = wandb.init(project="COLA",name=name)
     agent = SacAgent(env_id=args.env_id, env=env, log_dir=log_dir, **configs)

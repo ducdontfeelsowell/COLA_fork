@@ -1,3 +1,4 @@
+import argparse
 import unittest
 
 import gym
@@ -7,6 +8,8 @@ from environments.non_stationary import (
     NormalDistribution,
     NonStationaryEnv,
     RandomizedScheduler,
+    add_non_stationary_arguments,
+    wrap_environment_from_args,
 )
 
 
@@ -126,6 +129,74 @@ class NormalDistributionTests(unittest.TestCase):
     def test_rejects_non_positive_standard_deviation(self):
         with self.assertRaises(ValueError):
             NormalDistribution(mean=1.0, standard_deviation=0.0)
+
+
+class NonStationaryCliTests(unittest.TestCase):
+    def make_parser(self):
+        parser = argparse.ArgumentParser()
+        add_non_stationary_arguments(parser)
+        return parser
+
+    def test_stationary_environment_is_unchanged_without_flag(self):
+        base_env = DummyEnv()
+        args = self.make_parser().parse_args([])
+
+        env = wrap_environment_from_args(base_env, args, seed=37)
+
+        self.assertIs(env, base_env)
+
+    def test_normal_cli_configuration_wraps_and_updates_environment(self):
+        args = self.make_parser().parse_args(
+            [
+                "--non-stationary",
+                "--ns-parameter", "gain",
+                "--ns-degree-mean", "2.0",
+                "--ns-degree-std", "0.1",
+                "--ns-degree-low", "2.0",
+                "--ns-degree-high", "2.0",
+                "--ns-interval-mean", "1.0",
+                "--ns-interval-std", "0.1",
+                "--ns-interval-low", "1",
+                "--ns-interval-high", "1",
+            ]
+        )
+
+        env = wrap_environment_from_args(DummyEnv(), args, seed=41)
+        _, reward, _, info = env.step(0)
+
+        self.assertIsInstance(env, NonStationaryEnv)
+        self.assertEqual(reward, 20.0)
+        self.assertIn("non_stationary_update", info)
+
+    def test_uniform_cli_configuration_uses_requested_interval_range(self):
+        args = self.make_parser().parse_args(
+            [
+                "--non-stationary",
+                "--ns-parameter", "gain",
+                "--ns-degree-distribution", "uniform",
+                "--ns-degree-low", "0.8",
+                "--ns-degree-high", "1.2",
+                "--ns-interval-distribution", "uniform",
+                "--ns-interval-low", "2",
+                "--ns-interval-high", "4",
+            ]
+        )
+
+        env = wrap_environment_from_args(DummyEnv(), args, seed=43)
+
+        self.assertIsInstance(env, NonStationaryEnv)
+        self.assertTrue(2 <= env.next_update_step <= 4)
+
+    def test_cli_configuration_rejects_invalid_interval_bounds(self):
+        args = self.make_parser().parse_args(
+            [
+                "--non-stationary",
+                "--ns-interval-low", "0",
+            ]
+        )
+
+        with self.assertRaises(ValueError):
+            wrap_environment_from_args(DummyEnv(), args, seed=47)
 
 
 class NonStationaryEnvTests(unittest.TestCase):

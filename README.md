@@ -43,7 +43,7 @@ pip install -r requirements.txt
 Train COLA on a 2D multi-objective Ant task:
 
 ```bash
-python main.py   --env_id "MO-Ant-2d"   --seed 1   --Use_Critic_Preference   --Use_Policy_Preference   --Policy_use_latent   --Policy_use_s   --Policy_use_w   --Critic_use_both   --Critic_use_s   --Critic_use_a   --latent_dim 50   --regular_alpha 0.001   --regular_bar 0.25
+python main.py   --env_id "MO-Ant-v2"   --seed 1   --Use_Critic_Preference   --Use_Policy_Preference   --Policy_use_latent   --Policy_use_s   --Policy_use_w   --Critic_use_both   --Critic_use_s   --Critic_use_a   --latent_dim 50   --regular_alpha 0.001   --regular_bar 0.25
 ```
 
 You can also use the pre-configured launcher in `run.sh` to reproduce experiments for all tasks.
@@ -52,10 +52,15 @@ You can also use the pre-configured launcher in `run.sh` to reproduce experiment
 
 We follow the paper’s multi-objective MuJoCo tasks (2–5 objectives). Example task set:
 
-- **2D:** `MO-HalfCheetah-2d`, `MO-Hopper-2d`, `MO-Walker-2d`, `MO-Ant-2d`  
-- **3D:** `MO-Hopper-3d`, `MO-Ant-3d`  
-- **4D:** `MO-Ant-4d`  
-- **5D:** `MO-HalfCheetah-5d`, `MO-Hopper-5d`, `MO-Ant-5d`
+- **2D:** `MO-HalfCheetah-v2`, `MO-New-HalfCheetah-v2`, `MO-Hopper-v2`,
+  `MO-Walker2d-v2`, `MO-Ant-v2`, `MO-Swimmer-v2`, `MO-Humanoid-v2`
+- **3D:** `MO-Hopper-v3`, `MO-Ant-v3`
+- **4D:** `MO-Ant-v4`
+- **5D:** `MO-HalfCheetah-v5`, `MO-Hopper-v5`, `MO-Ant-v5`,
+  `MO-Humanoid-v5`
+
+The authoritative environment IDs and their Python entry points are registered
+in `environments/__init__.py`.
 
 Each task runs for 500 steps per episode, with objectives including forward/axis speed, jump height, and energy efficiency; some 4D/5D variants add per-limb energy costs.
 
@@ -66,6 +71,34 @@ more core parameters at randomized global time steps. It uses only Gym and
 NumPy already pinned in `environmentV2.yml`. For example, the following changes
 all Ant body masses to between 80% and 120% of their original values every
 100--500 steps:
+
+The training entry point can apply the wrapper directly. There are no separate
+wrapped environment IDs: `--env_id` selects one of the base IDs registered in
+`environments/__init__.py`, and `--non-stationary` wraps that instance before
+`SacAgent` is created.
+
+```bash
+python main.py \
+  --env_id "MO-Ant-v2" \
+  --seed 1 \
+  --non-stationary \
+  --ns-parameter model.body_mass \
+  --ns-degree-distribution normal \
+  --ns-degree-mean 1.0 \
+  --ns-degree-std 0.1 \
+  --ns-degree-low 0.8 \
+  --ns-degree-high 1.2 \
+  --ns-interval-distribution normal \
+  --ns-interval-mean 300 \
+  --ns-interval-std 75 \
+  --ns-interval-low 100 \
+  --ns-interval-high 500 \
+  --ns-change-mode scale
+```
+
+Repeat `--ns-parameter` to alter several parameters with the same sampled
+degree. Omitting `--non-stationary` preserves the original stationary training
+path. The equivalent Python API is:
 
 ```python
 import gym
@@ -116,9 +149,40 @@ env = NonStationaryEnv(
 ```
 
 Gym spaces, SciPy frozen distributions, callables that accept a NumPy random
-generator, and constants are accepted as distributions. For a parameter that
-cannot be represented by an attribute path, pass an `update_fn(env, degree)`
-callback instead:
+generator, constants, and the included `NormalDistribution` are accepted as
+distributions. For example, this uses bounded normal samples for both the mass
+scaling factor and update interval:
+
+```python
+from environments import NonStationaryEnv, NormalDistribution
+
+env = NonStationaryEnv(
+    gym.make("MO-Ant-v2"),
+    parameter_paths="model.body_mass",
+    degree_distribution=NormalDistribution(
+        mean=1.0,
+        standard_deviation=0.1,
+        low=0.8,
+        high=1.2,
+    ),
+    interval_distribution=NormalDistribution(
+        mean=300,
+        standard_deviation=75,
+        low=100,
+        high=500,
+    ),
+    seed=1,
+)
+```
+
+The scheduler rounds a fractional normal interval up to the next whole step.
+The bounds are optional; without them, `NormalDistribution` is an ordinary
+unbounded normal distribution. Bounds clip outlying samples, which helps avoid
+negative physical scales or timestep intervals. SciPy's `stats.norm` and
+`stats.truncnorm` frozen distributions are also accepted directly.
+
+For a parameter that cannot be represented by an attribute path, pass an
+`update_fn(env, degree)` callback instead:
 
 ```python
 def change_one_body(env, degree):
