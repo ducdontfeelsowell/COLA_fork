@@ -59,6 +59,80 @@ We follow the paper’s multi-objective MuJoCo tasks (2–5 objectives). Example
 
 Each task runs for 500 steps per episode, with objectives including forward/axis speed, jump height, and energy efficiency; some 4D/5D variants add per-limb energy costs.
 
+## Non-stationary environments
+
+`NonStationaryEnv` can wrap any existing Gym environment and change one or
+more core parameters at randomized global time steps. It uses only Gym and
+NumPy already pinned in `environmentV2.yml`. For example, the following changes
+all Ant body masses to between 80% and 120% of their original values every
+100--500 steps:
+
+```python
+import gym
+import numpy as np
+
+from environments import NonStationaryEnv
+
+base_env = gym.make("MO-Ant-v2")
+env = NonStationaryEnv(
+    base_env,
+    parameter_paths="model.body_mass",
+    degree_distribution=gym.spaces.Box(
+        low=np.array([0.8], dtype=np.float32),
+        high=np.array([1.2], dtype=np.float32),
+        dtype=np.float32,
+    ),
+    interval_distribution=gym.spaces.Discrete(401),
+    interval_offset=100,  # Discrete(401) + 100 gives 100,...,500 steps.
+    change_mode="scale",
+    seed=1,
+)
+```
+
+Updates occur immediately before the action at the scheduled step. The global
+clock spans episode resets by default, and `env.next_update_step`,
+`env.elapsed_steps`, and `env.last_update` expose its state. On an updated
+transition, the same metadata is available as
+`info["non_stationary_update"]`. Call `env.update(degree=...)` for a manual
+update, `env.reset_scheduler()` to restart the clock, or
+`env.restore_parameters()` to restore values captured when wrapping.
+
+The built-in path updater supports shared MuJoCo fields such as
+`model.body_mass`, `model.geom_friction`, `model.dof_damping`,
+`model.actuator_gear`, and `model.opt.gravity`. A mapping gives each parameter
+its own distribution:
+
+```python
+env = NonStationaryEnv(
+    gym.make("MO-Hopper-v2"),
+    parameter_paths=("model.body_mass", "model.geom_friction"),
+    degree_distribution={
+        "model.body_mass": gym.spaces.Box(0.9, 1.1, shape=(1,)),
+        "model.geom_friction": gym.spaces.Box(0.7, 1.3, shape=(1,)),
+    },
+    interval_distribution=lambda rng: rng.randint(250, 751),
+    seed=1,
+)
+```
+
+Gym spaces, SciPy frozen distributions, callables that accept a NumPy random
+generator, and constants are accepted as distributions. For a parameter that
+cannot be represented by an attribute path, pass an `update_fn(env, degree)`
+callback instead:
+
+```python
+def change_one_body(env, degree):
+    env.model.body_mass[1] *= float(degree)
+
+env = NonStationaryEnv(
+    gym.make("MO-Humanoid-v2"),
+    update_fn=change_one_body,
+    degree_distribution=lambda rng: rng.uniform(0.95, 1.05),
+    interval_distribution=lambda rng: rng.randint(100, 501),
+    seed=1,
+)
+```
+
 ## 📊 Training 
 
 ### Preference grids

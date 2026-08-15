@@ -1,5 +1,12 @@
 from gym.envs.registration import register
 
+from environments.non_stationary import (
+    NormalDistribution,
+    NonStationaryEnv,
+    NonStationaryWrapper,
+    RandomizedScheduler,
+)
+
 
 register(
     id = 'MO-Ant-v3',
