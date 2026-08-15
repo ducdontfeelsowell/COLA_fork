@@ -1,0 +1,5 @@
+git+https://github.com/fossasia/visdom -> requirements.txt
+python /mnt/c/Users/admin/PycharmProjects/COLAv2/main.py   --env_id "MO-Ant-v2"   --seed 1   --Use_Critic_Preference   --Use_Policy_Preference   --Policy_use_latent   --Policy_use_s   --Policy_use_w   --Critic_use_both   --Critic_use_s   --Critic_use_a   --latent_dim 50   --regular_alpha 0.001   --regular_bar 0.25
+mujoco-py==2.0.2.9 -> environment.yml
+conda env config vars unset CFLAGS #undo cflags setting
+python -m visdom.server #run in a different terminal to get a web view of the process

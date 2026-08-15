@@ -2,15 +2,15 @@ import os
 import torch
 import wandb
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 cpu_num = 1
 os.environ ['OMP_NUM_THREADS'] = str(cpu_num)
 os.environ ['OPENBLAS_NUM_THREADS'] = str(cpu_num)
 os.environ ['MKL_NUM_THREADS'] = str(cpu_num)
 os.environ ['VECLIB_MAXIMUM_THREADS'] = str(cpu_num)
 os.environ ['NUMEXPR_NUM_THREADS'] = str(cpu_num)
-os.environ["WANDB_API_KEY"] = "b26af16f098a021f99a7de6c84df44c8a5728033"
-#os.environ["WANDB_MODE"] = "offline"
+#os.environ["WANDB_API_KEY"] = "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"
+os.environ["WANDB_MODE"] = "offline"
 torch.set_num_threads(cpu_num)
 import argparse
 from datetime import datetime
@@ -24,7 +24,8 @@ from agent import SacAgent
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_id', type=str, default='dst_d-v0')
-    parser.add_argument('--cuda', action='store_true', default=False)
+    parser.add_argument('--cuda', dest="use_cuda", action='store_true', default=True, help="use CUDA (default: True)")
+    parser.add_argument('--no-cuda', dest="use_cuda", action='store_false', help="disable CUDA (force CPU)")
 
     parser.add_argument('--Use_Policy_Preference', action='store_true', default=False)
     parser.add_argument('--Use_Critic_Preference', action='store_true', default=False)
@@ -48,7 +49,7 @@ def run():
     parser.add_argument('--encoder_update_freq', type=int, default=1)
 
     parser.add_argument('--pop_size', type=int, default=4)
-    parser.add_argument('--cuda_device', type=int, default=-1)
+    parser.add_argument('--cuda_device', type=int, default=0, help="GPU device (default: 0). Use -1 to disable")
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--prefer', type=int, default=0)
     parser.add_argument('--buf_num', type=int, default=0)
@@ -80,11 +81,19 @@ def run():
 
     args = parser.parse_args()
 
+    # Set CUDA_VISIBLE_DEVICES based on the flags
+    if not args.use_cuda or args.cuda_device < 0:
+        # Force CPU‑only – hide every GPU from PyTorch
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    else:
+        # Expose only the chosen GPU (or all if you pass a comma‑list later)
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda_device)
+
     name = "COLA_Consider_other_"+str(args.consider_other)+"_Regular_bar_"+ str(args.regular_bar)+"_Freq_"+str(args.old_Q_update_freq)+"_Regular_" + str(args.regular_alpha) + "_Critic_infos_"  + str(args.Critic_use_both) + "_"+str(args.use_avg)+"_"+str(args.Critic_use_s) + "_"+ str(args.Critic_use_a)+"_"+str(args.Policy_use_latent)+str(args.Policy_use_s)+"_"+str(args.Policy_use_w)+ "_Env_" + str(args.env_id)
 
     # You can define configs in the external json or yaml file.
     configs = {
-        'num_steps': 8000000,
+        'num_steps': 500000, #originally: 8 m
         'batch_size': 256,#256
         'lr': 0.0003,
         'hidden_units': [256, 256],
@@ -102,15 +111,15 @@ def run():
         'beta_annealing': 0.0001,  # It's ignored when per=False.
         'grad_clip': None,
         'updates_per_step': 1,
-        'start_steps': 10000,
+        'start_steps': 10000, #original 10000
         'log_interval': 10,
         'target_update_interval': 1,
-        'eval_interval': 50000,
-        'cuda': args.cuda,
+        'eval_interval': 50000, #original 50000
+        'cuda': args.use_cuda,
         'seed': args.seed,
         'cuda_device': args.cuda_device,
         'q_frequency': args.q_freq,
-        'model_saved_step': 100000,
+        'model_saved_step': 100000, #original 100000
         'Use_Policy_Preference': args.Use_Policy_Preference,
         'Use_Critic_Preference': args.Use_Critic_Preference,
         'train_with_fixed_preference': args.train_with_fixed_preference,
@@ -152,6 +161,9 @@ def run():
     agent = SacAgent(env_id=args.env_id, env=env, log_dir=log_dir, **configs)
     agent.run(our_wandb)
 
+# def load_checkpoint():
+#     agent = SacAgent(..., log_dir=log_dir, **configs)
+#     agent.load_checkpoint(step_tag='80')  # loads the checkpoint saved after 4 M steps
 
 if __name__ == '__main__':
     run()

@@ -15,6 +15,7 @@ import random
 from multi_step import *
 from datetime import datetime
 import time
+import wandb
 
 from hypervolume import InnerHyperVolume
 from copy import deepcopy
@@ -61,7 +62,7 @@ class EP:
 
     def update(self, sample_batch):
         self.sample_batch = np.append(self.sample_batch, np.array(deepcopy(sample_batch)))
-        
+
         #print(" 1  ??? ", len(self.sample_batch ))
         for sample in sample_batch:
             self.obj_batch = np.vstack([self.obj_batch, sample.objs]) if len(self.obj_batch) > 0 else np.array([sample.objs])
@@ -114,7 +115,7 @@ class Sample:
         objs = deepcopy(sample.objs)
         weight = deepcopy(sample.weight)
         optimizer =  deepcopy(sample.optimizer)
-        
+
         return cls(policy, optimizer ,weight, objs)
 
     def link_policy_agent(self, optimizer):
@@ -197,20 +198,60 @@ class Monitor(object):
 
     def __init__(self, spec,path):
 
-        env_name = spec['env_name']
-        set_num = spec['set_num']
-        buf_num = spec['buf_num']
-        self.vis = visdom.Visdom(env = f'MOSAC{datetime.now().strftime("%m%d")}-{env_name}_pref{set_num}_buf{buf_num}' ,port = 8097)
+        # env_name = spec['env_name']
+        # set_num = spec['set_num']
+        # buf_num = spec['buf_num']
+        env_name = spec.get('env_name', 'UNKNOWN')
+        set_num = spec.get('set_num', 0)
+        buf_num = spec.get('buf_num', 0)
+
+        # self.vis = visdom.Visdom(env = f'MOSAC{datetime.now().strftime("%m%d")}-{env_name}_pref{set_num}_buf{buf_num}' ,port = 8097)
+        # -----------------------------------------------------------------
+        #    Build the Visdom environment name.
+        #    If Visdom cannot be started (e.g., no server listening on 8097)
+        #    we replace it with a dummy object that silently discards calls.
+        # -----------------------------------------------------------------
+        try:
+            self.vis = visdom.Visdom(
+                env=f'MOSAC{datetime.now().strftime("%m%d")}-{env_name}_pref{set_num}_buf{buf_num}',
+                port=8097
+            )
+        except Exception:  # pragma: no‑cover
+            # Dummy placeholder – every attribute access returns a no‑op lambda
+            class _DummyVis:
+                def __getattr__(self, name):
+                    return lambda *a, **k: None
+
+            self.vis = _DummyVis()
+
         self.spec = spec
-        if spec['pref'][0] == 0.9:
+
+        # -----------------------------------------------------------------
+        # Safely extract optional preference values from the environment spec.
+        # Older or custom environments may omit the 'pref' key entirely.
+        # We fall back to default values (set_num=0, buf_num=0) if it is missing.
+        # Users can still override these defaults via the CLI (--set_num, --buf_num)
+        # -----------------------------------------------------------------
+        pref = spec.get('pref', [0, 0])  # default list of two zeros
+        # Ensure we have exactly two elements; pad/truncate if needed
+        if not isinstance(pref, (list, tuple)):
+            pref = [0, 0]
+        if len(pref) < 2:
+            pref = list(pref) + [0] * (2 - len(pref))
+
+        if pref[0] == 0.9: #originally spec['pref'][0] == ...
             print(999)
             self.path = os.path.join(path,'reward_log91.npz')
-        elif spec['pref'][0] == 0.5:
+        elif pref[0] == 0.5:
             print(555)
             self.path = os.path.join(path,'reward_log55.npz')
-        elif spec['pref'][0] == 0.1:
+        elif pref[0] == 0.1:
             print(111)
             self.path = os.path.join(path,'reward_log19.npz')
+        else:
+            # Fallback – any unexpected value gets a generic filename.
+            print("[WARN] Unexpected pref value:", pref[0])
+            self.path = os.path.join(path, 'reward_log_unknown.npz')
 
 
         self.value_window = None
@@ -227,22 +268,22 @@ class Monitor(object):
                                               Y=torch.Tensor([tot_reward, Rew_1, Rew_2, loss]).unsqueeze(0).cpu(),
                                               opts=dict(xlabel='steps_per10000',
                                                         ylabel='Reward value',
-                                                        title='Value Dynamics ' + str(self.spec['pref']) + ' ' + str(self.spec['seed']),
+                                                        title='Value Dynamics ' + str(self.spec.get('pref', 'N/A')) + ' ' + str(self.spec.get('seed', 'N/A')),
                                                         legend=['Total Reward', 'forward_reward', 'ctrl cost','loss']))
         else:
             #Smoothing
             self.tot_t = np.append(self.tot_t, tot_reward)
             tot_reward = np.mean(self.tot_t[-20:])
-            
+
             self.rew_1_t = np.append(self.rew_1_t, Rew_1)
             Rew_1 = np.mean(self.rew_1_t[-20:])
-            
+
             self.rew_2_t = np.append(self.rew_2_t, Rew_2)
             Rew_2 = np.mean(self.rew_2_t[-20:])
-            
+
             if hasattr(self, 'path'):
                 np.savez(self.path,tot=self.tot_t, rew_1 = self.rew_1_t, rew_2 = self.rew_2_t)
-            
+
             self.loss_t = np.append(self.loss_t, loss)
             loss = np.mean(self.loss_t[-20:])
 
@@ -362,9 +403,9 @@ class SacAgent:
                 hidden_units=[128,128], Use_Policy_Preference=self.Use_Policy_Preference).to(self.device)
 
 
-        self.latent_encoder = Latent_Encoder(use_avg, self.env.observation_space.shape[0], self.env.action_space.shape[0] , self.env.reward_num, self.latent_dim)
+        self.latent_encoder = Latent_Encoder(use_avg, self.env.observation_space.shape[0], self.env.action_space.shape[0] , self.env.reward_num, self.latent_dim).to(self.device)
 
-        self.latent_encoder_target = copy.deepcopy(self.latent_encoder)
+        self.latent_encoder_target = copy.deepcopy(self.latent_encoder).to(self.device)
 
         if self.Critic_use_both:
             input_dim = self.latent_dim*2
@@ -462,8 +503,18 @@ class SacAgent:
         if not os.path.exists(self.summary_dir):
             os.makedirs(self.summary_dir)
 
-        
+
+        # --- Added initialization of missing attributes before constructing Monitor ---
+        self.set_num = prefer_num  # Number of preference sets (was defined later, now moved up)
+        self.buf_num = buf_num    # Buffer identifier (was never set before Monitor)
         self.monitor = []
+        #I modified here
+        self.monitor = Monitor(
+            spec={'env_name': env_id,
+                  'set_num': self.set_num,
+                  'buf_num': self.buf_num},
+            path=self.log_dir)  # the same folder where wandb stores logs
+
         self.tot_t = []
         self.reward_v = []
         if self.env.reward_num == 3:
@@ -478,7 +529,7 @@ class SacAgent:
             self.tot_t.append([])
             self.reward_v.append([])
 
-        
+
         self.set_num = prefer_num # set of ω'
         self.record_fau = 0
         self.steps = 0
@@ -512,6 +563,20 @@ class SacAgent:
         self.insert_pop = 0.0
         self.insert_ep = 0.0
 
+    #checkpoint loader
+    def load_checkpoint(self, step_tag):
+        """Utility to load a previously saved checkpoint."""
+        ckpt_dir = os.path.join(self.log_dir, 'model')
+        self.policy.load_state_dict(
+            torch.load(os.path.join(ckpt_dir, f'policy_{step_tag}.pkl'), map_location=self.device))
+        self.latent_encoder.load_state_dict(
+            torch.load(os.path.join(ckpt_dir, f'encoder_{step_tag}.pkl'), map_location=self.device))
+        self.critic.load_state_dict(
+            torch.load(os.path.join(ckpt_dir, f'critic_{step_tag}.pkl'), map_location=self.device))
+        self.critic_target.load_state_dict(
+            torch.load(os.path.join(ckpt_dir, f'critic_target_{step_tag}.pkl'), map_location=self.device))
+        self.latent_encoder_target.load_state_dict(
+            torch.load(os.path.join(ckpt_dir, f'encoder_target_{step_tag}.pkl'), map_location=self.device))
 
     def get_pref(self):
 
@@ -690,7 +755,7 @@ class SacAgent:
                 critic_input = torch.cat([critic_input, next_actions], -1)
 
             next_q1, next_q2 = self.critic_target(critic_input, preference, preference)
-            
+
             #We choose argmin_Q (ωTQ)
             w_q1 = torch.einsum('ij,j->i',[next_q1, preference[0] ])
             w_q2 = torch.einsum('ij,j->i',[next_q2, preference[0] ])
@@ -699,7 +764,7 @@ class SacAgent:
             mask = torch.reshape(mask, next_q1.shape)
 
             minq = torch.where( mask, next_q1, next_q2)
-                
+
             next_q = minq + self.alpha * next_entropies
 
         target_q = rewards + (1.0 - dones) * self.gamma_n * next_q
@@ -730,8 +795,24 @@ class SacAgent:
         res2 /= representation_a.shape[0]
         return res.cpu().data.numpy(), res2.cpu().data.numpy()
 
-
-
+    def log_checkpoint(self, step_tag):
+        ckpt_dir = self.model_dir  # same dir where torch.save writes
+        try:
+            artifact = wandb.Artifact(
+                name=f'policy-checkpoint-{step_tag}',
+                type='model',
+                description=f'Checkpoint after {self.steps:,} environment steps')
+            for fname in [f'policy_{step_tag}.pkl', f'encoder_{step_tag}.pkl',
+                          f'critic_{step_tag}.pkl', f'critic_target_{step_tag}.pkl',
+                          f'encoder_target_{step_tag}.pkl']:
+                fpath = os.path.join(ckpt_dir, fname)
+                if os.path.isfile(fpath):
+                    artifact.add_file(fpath)
+                else:
+                    print(f'[WARN] Checkpoint file not found, skipping: {fpath}')
+            wandb.log_artifact(artifact)
+        except Exception as e:
+            print(f'[WARN] Failed to log wandb artifact: {e}')
 
     def train_episode(self,Preference_for_HV):
 
@@ -761,16 +842,26 @@ class SacAgent:
         self.EP.update([sample])
         self.Real_EP.update([sample])
 
-#        if self.steps - self.previous_save >= 50000:
-#            if not os.path.exists("./logs/" + self.Wandb_name):
-#                os.makedirs("./logs/" + self.Wandb_name)
-#
-#            self.previous_save = self.steps
-#            torch.save(self.policy.state_dict(), "./logs/" + self.Wandb_name + "/policy_" + str(int(self.steps/50000))+".pkl")
-#            torch.save(self.latent_encoder.state_dict(), "./logs/" + self.Wandb_name + "/encoder_"+str(int(self.steps/50000))+".pkl")
-#            torch.save(self.critic.state_dict(), "./logs/" + self.Wandb_name + "/critic"+str(int(self.steps/50000))+".pkl")
-#            torch.save(self.critic_target.state_dict(), "./logs/" + self.Wandb_name + "/critic_target_"+str(int(self.steps/50000))+".pkl")
-#            torch.save(self.latent_encoder_target.state_dict(), "./logs/" + self.Wandb_name + "/encoder_target_" + str(int(self.steps /50000)) + ".pkl")
+        #save block
+        if self.steps - self.previous_save >= 50000:
+            # Use self.model_dir (= self.log_dir/model/) so all paths are consistent
+            if not os.path.exists(self.model_dir):
+                os.makedirs(self.model_dir)
+
+            self.previous_save = self.steps
+            step_tag = str(int(self.steps / 50000))
+            torch.save(self.policy.state_dict(), os.path.join(self.model_dir, f'policy_{step_tag}.pkl'))
+            torch.save(self.latent_encoder.state_dict(), os.path.join(self.model_dir, f'encoder_{step_tag}.pkl'))
+            torch.save(self.critic.state_dict(), os.path.join(self.model_dir, f'critic_{step_tag}.pkl'))
+            torch.save(self.critic_target.state_dict(), os.path.join(self.model_dir, f'critic_target_{step_tag}.pkl'))
+            torch.save(self.latent_encoder_target.state_dict(), os.path.join(self.model_dir, f'encoder_target_{step_tag}.pkl'))
+            #save to wandb
+            self.log_checkpoint(step_tag)  # artifact version
+            try:
+                wandb.save(os.path.join(self.model_dir, '*.pkl'))  # simple version
+            except Exception as e:
+                print(f'[WARN] wandb.save failed: {e}')
+
             # with open("./logs/" + self.Wandb_name + "champion_buffer.pkl", 'wb+') as buffer_file:
             #     pickle.dump(self.big_memory, buffer_file)
 
@@ -836,11 +927,24 @@ class SacAgent:
 
             hv, sparsity, UT = evluate_Hv_UT_and_spa(self.env.reward_num, objs, PREF_)
             self.our_wandb.log({'Population_num':  len(self.population.sample_batch), 'Ep_num': len(self.EP.sample_batch), 'hypervolume': hv, 'sparsity': sparsity, 'UT': UT, 'time_steps': self.steps})
-        
+
         print(f'episode: {self.episodes:<4}  '
               f'episode steps: {episode_steps:<4}  '
               f'episode weight: {preference}  '
               f'rl reward:', rl_reward, " cost avg time", (time.time() - start)/episode_steps )
+
+        #I modified this
+        # after all the logging that wandb already does
+        if self.monitor:
+            # rl_reward is a multi-objective numpy array (e.g. [-229, -111]).
+            # Monitor.update() expects scalars for its Visdom line plot.
+            _rew = np.asarray(rl_reward, dtype=np.float64)
+            self.monitor.update(
+                eps=self.steps,
+                tot_reward=float(_rew.sum()),    # scalar: sum of objectives
+                Rew_1=float(_rew[0]) if len(_rew) > 0 else 0.0,
+                Rew_2=float(_rew[1]) if len(_rew) > 1 else 0.0,
+                loss=float(self.loss_t[-1]) if hasattr(self, 'loss_t') and len(self.loss_t) > 0 else 0.0)
 
     def learn(self,fixed_preference, other_fixed_preference):
         self.learning_steps += 1
@@ -857,7 +961,7 @@ class SacAgent:
         if self.learning_steps % self.q_frequency == 0 and self.learning_steps > 20000:
             co = copy.deepcopy(self.critic)
             self.Q_memory.append(co)
-        
+
         if self.per:
             # batch with indices and priority weights
             batch, indices, weights = \
@@ -1057,7 +1161,7 @@ class SacAgent:
     def calc_policy_loss(self, current_latent,  batch, weights, preference, PREF):
         states, _, actions, rewards, next_states, dones = batch
         preference_batch = preference.repeat(self.batch_size, 1)
-        
+
         losses = []
 
         for a, c in enumerate([ self.critic]+self.Q_memory.sample() ): # Use critic from Q Replay Buffer
@@ -1088,11 +1192,11 @@ class SacAgent:
                     critic_input = torch.cat([critic_input, sampled_action], -1)
 
                 q1, q2 = c(critic_input, preference_batch, preference_batch)
-                
+
                 q1 = torch.tensordot(q1, preference, dims = 1)
                 q2 = torch.tensordot(q2, preference, dims = 1)
                 q = torch.min(q1, q2)
-                
+
                 l = - q - self.alpha * entropy
                 losses.append(l)
 

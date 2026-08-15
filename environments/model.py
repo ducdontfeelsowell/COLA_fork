@@ -5,6 +5,7 @@ from rltorch.network import create_linear_network
 import os
 import copy
 import random
+import numpy as np
 
 class Conflict_caculate():
     def __init__(self, optimizer, reduction='mean'):
