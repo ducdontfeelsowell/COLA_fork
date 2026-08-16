@@ -11,6 +11,9 @@ class QMemory:
         if self.capacity > 0:
             self._append(critic)
     def _append(self, critic):
+        critic.eval()
+        for parameter in critic.parameters():
+            parameter.requires_grad = False
         if len(self.buffer) < self.capacity:
             self.buffer.append(critic)
         else:
@@ -113,7 +116,14 @@ class MOMemory:
             self.next_states[valid], self.dones[valid])
 
     def load(self, batch):
+        if len(batch) != 6:
+            raise ValueError("a multi-objective replay batch must contain 6 arrays")
         num_data = len(batch[0])
+        if any(len(component) != num_data for component in batch):
+            raise ValueError("all replay batch components must have the same length")
+        if num_data > self.capacity:
+            batch = tuple(component[-self.capacity:] for component in batch)
+            num_data = self.capacity
 
         if self._p + num_data <= self.capacity:
             self._insert(
@@ -133,7 +143,7 @@ class MOMemory:
         self._p = (self._p + num_data) % self.capacity
 
     def _insert(self, mem_indices, batch, batch_indices):
-        states, actions, rewards, next_states, dones = batch
+        states, preferences, actions, rewards, next_states, dones = batch
         self.states[mem_indices] = states[batch_indices]
         self.preferences[mem_indices] = preferences[batch_indices]
         self.actions[mem_indices] = actions[batch_indices]

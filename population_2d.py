@@ -145,18 +145,36 @@ class Population:
         self.z_min = np.zeros(obj_num) # reference point
         self.pbuffers = None
         self.pbuffer_dist = None
+        self.reference_directions = None
+        if len(self.z_min) > 2:
+            rng = np.random.RandomState(0)
+            self.reference_directions = rng.dirichlet(
+                np.ones(len(self.z_min)), size=self.pbuffer_num
+            )
+            # Guarantee representation of every single-objective extreme.
+            for objective in range(min(len(self.z_min), self.pbuffer_num)):
+                self.reference_directions[objective] = 0.0
+                self.reference_directions[objective, objective] = 1.0
 
     '''
     insert the sample to the performance buffers (storing the index).
     '''
     def insert_pbuffer(self, index, objs):
         f = objs - self.z_min
-        if np.min(f) < 1e-7:
+        if not np.all(np.isfinite(f)) or np.min(f) < 0.0:
             return False
 
         dist = np.linalg.norm(f)
-        theta = np.arccos(np.clip(f[1] / dist, -1.0, 1.0))
-        buffer_id = int(theta // self.dtheta)
+        if dist < 1e-12:
+            return False
+        if len(f) == 2:
+            theta = np.arccos(np.clip(f[1] / dist, -1.0, 1.0))
+            buffer_id = min(int(theta // self.dtheta), self.pbuffer_num - 1)
+        else:
+            direction = f / dist
+            ref_norms = np.linalg.norm(self.reference_directions, axis=1)
+            similarities = self.reference_directions.dot(direction) / ref_norms
+            buffer_id = int(np.argmax(similarities))
         if buffer_id < 0 or buffer_id >= self.pbuffer_num:
             return False
 
@@ -190,14 +208,25 @@ class Population:
         self.pbuffers = [[] for _ in range(self.pbuffer_num)]       # store the sample indices in each pbuffer
         self.pbuffer_dist = [[] for _ in range(self.pbuffer_num)]   # store the sample distance in each pbuffer
 
+        finite_objectives = [
+            np.asarray(sample.objs, dtype=np.float64)
+            for sample in all_sample_batch
+            if np.all(np.isfinite(sample.objs))
+        ]
+        if finite_objectives:
+            # Use a population-relative dominated reference so valid returns
+            # are not discarded merely because one objective is negative.
+            self.z_min = np.min(np.stack(finite_objectives), axis=0) - 1e-8
+
         ### select the population by performance buffer ###       
+        inserted_any = False
         for i, sample in enumerate(all_sample_batch):
-            insert_True = self.insert_pbuffer(i, sample.objs)
+            inserted_any = self.insert_pbuffer(i, sample.objs) or inserted_any
         
         for pbuffer in self.pbuffers:
             for index in pbuffer:
                 self.sample_batch.append(all_sample_batch[index])
-        return insert_True
+        return inserted_any
 
     def compute_hypervolume(self, objs_batch):
         ep_objs_batch = deepcopy(np.array(objs_batch)[get_ep_indices(objs_batch)])
@@ -323,7 +352,7 @@ class Population:
     def uniformly_select_two_samples(self):
 
         UpdatedList = random.sample(self.sample_batch, 2)
-        return UpdatedList[0], UpdatedList[0]
+        return UpdatedList[0], UpdatedList[1]
 
     def uniformly_select_one_samples(self):
 

@@ -3,8 +3,8 @@
 # x-axis speed, y-axis speed
 
 import numpy as np
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from environments.mujoco_compat import mujoco_env
 from os import path
 
 class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
@@ -35,10 +35,10 @@ class AntEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         vx_reward =  (xposafter - xposbefore) / self.dt #+ other_reward
 
-        energy_one = 4.0 - 4.0 * np.square(a[0:2]).mean()  #+ survive_reward  +
-        energy_two = 4.0 - 4.0 * np.square(a[2:4]).mean() # + survive_reward
-        energy_three = 4.0 - 4.0 * np.square(a[4:6]).mean()  # + survive_reward
-        energy_four = 4.0 - 4.0 * np.square(a[6:8]).mean() # + survive_reward
+        energy_one = vx_reward + 4.0 - 4.0 * np.square(a[0:2]).mean()
+        energy_two = vx_reward + 4.0 - 4.0 * np.square(a[2:4]).mean()
+        energy_three = vx_reward + 4.0 - 4.0 * np.square(a[4:6]).mean()
+        energy_four = vx_reward + 4.0 - 4.0 * np.square(a[6:8]).mean()
 
         #reward = self.cost_weights[0] * vx_reward + self.cost_weights[1] * vy_reward
         state = self.state_vector()

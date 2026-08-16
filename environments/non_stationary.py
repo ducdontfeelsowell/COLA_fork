@@ -7,12 +7,13 @@ remain compatible with the dependencies pinned in ``environmentV2.yml``.
 from __future__ import absolute_import
 
 import copy
+from contextlib import contextmanager
 import math
 from collections.abc import Mapping
 
-import gym
+import gymnasium as gym
 import numpy as np
-from gym.utils import seeding
+from gymnasium.utils import seeding
 
 
 _NOT_PROVIDED = object()
@@ -289,6 +290,7 @@ class NonStationaryEnv(gym.Wrapper):
         self.seed_value = None
         self.update_count = 0
         self.last_update = None
+        self._updates_suspended = 0
 
         master_rng, actual_seed = seeding.np_random(seed)
         self.seed_value = int(actual_seed)
@@ -332,13 +334,28 @@ class NonStationaryEnv(gym.Wrapper):
         self.last_update = None
         return self.scheduler.reset(start_step)
 
+    @contextmanager
+    def suspend_updates(self):
+        """Hold the current regime and scheduler clock during evaluation.
+
+        Nested uses are supported. Environment dynamics stay at their current
+        values, and evaluation steps do not consume scheduled changes.
+        """
+        self._updates_suspended += 1
+        try:
+            yield self
+        finally:
+            self._updates_suspended -= 1
+
     def reset(self, **kwargs):
-        if self.reset_schedule_on_env_reset:
+        if self.reset_schedule_on_env_reset and self._updates_suspended == 0:
             self.reset_scheduler()
         return self.env.reset(**kwargs)
 
     def step(self, action):
-        event = self.update() if self.scheduler.tick() else None
+        event = None
+        if self._updates_suspended == 0 and self.scheduler.tick():
+            event = self.update()
         result = self.env.step(action)
 
         if event is None or not self.add_update_info:

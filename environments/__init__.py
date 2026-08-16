@@ -1,4 +1,12 @@
-from gym.envs.registration import register
+from gymnasium.envs.registration import register as _gym_register
+
+
+def register(**kwargs):
+    """Register COLA's vector-reward environments with Gymnasium."""
+    # Gymnasium's passive checker requires scalar rewards, while COLA
+    # intentionally returns one value per objective.
+    kwargs.setdefault("disable_env_checker", True)
+    return _gym_register(**kwargs)
 
 from environments.non_stationary import (
     NormalDistribution,
@@ -85,12 +93,6 @@ register(
 
 
 register(
-    id = 'MO-Humanoid-v6',
-    entry_point = 'environments.humanoid_v6:HumanoidEnv',
-    max_episode_steps=1000,
-)
-
-register(
     id = 'MO-Humanoid-v5',
     entry_point = 'environments.humanoid_v5:HumanoidEnv',
     max_episode_steps=1000,
@@ -100,4 +102,10 @@ register(
     id = 'MO-Ant-v4',
     entry_point = 'environments.ant_v4:AntEnv',
     max_episode_steps=500,
+)
+
+register(
+    id='MO-Ant-v5000',
+    entry_point='environments.5000_ant_v3:AntEnv',
+    max_episode_steps=5000,
 )

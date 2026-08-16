@@ -1,7 +1,7 @@
 from model import TwinnedQNetwork, GaussianPolicy
 from MO_lunar_lander import LunarLanderContinuous
 import dst_d
-import gym
+import gymnasium as gym
 import torch
 import numpy as np
 import half_cheetah_v3

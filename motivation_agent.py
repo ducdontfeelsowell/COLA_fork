@@ -5,12 +5,21 @@ import torch
 import copy
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
-from rltorch.memory import MultiStepMemory, PrioritizedMemory
 from base import QMemory
 
 from model import TwinnedQNetwork, GaussianPolicy, Latent_Encoder
-from utils import grad_false, hard_update, soft_update, to_batch,\
-    update_params, RunningMeanStats
+from utils import (
+    RunningMeanStats,
+    envelope_actor_loss_candidates,
+    generate_simplex_grid,
+    grad_false,
+    hard_update,
+    scale_action,
+    select_min_q_vectors,
+    soft_update,
+    to_batch,
+    update_params,
+)
 import random
 from multi_step import *
 from datetime import datetime
@@ -156,9 +165,9 @@ def evluate_Hv_UT_and_spa(obj_num, obj_batch, PREF_):
 
 
 p_name= ['9505','9010','8515','8020','7525','7030','6535','6040','5545','5050','4555','4060','3565','3070','2575','2080','1585','1090','0595']
-PREF = [[0.95,0.05],[0.9, 0.1], [0.85, 0.15], [0.8, 0.2], [0.75, 0.25], [0.7, 0.3], [0.65, 0.35], [0.6, 0.4], [0.55, 0.35], [0.5, 0.5], [0.45, 0.55], [0.4, 0.6], [0.35, 0.65], [0.3, 0.7], [0.25, 0.75],[0.2, 0.8], [0.15,0.85] ,[0.1,0.9]]
+PREF = [[0.95,0.05],[0.9, 0.1], [0.85, 0.15], [0.8, 0.2], [0.75, 0.25], [0.7, 0.3], [0.65, 0.35], [0.6, 0.4], [0.55, 0.45], [0.5, 0.5], [0.45, 0.55], [0.4, 0.6], [0.35, 0.65], [0.3, 0.7], [0.25, 0.75],[0.2, 0.8], [0.15,0.85] ,[0.1,0.9]]
 
-from pymoo.factory import get_performance_indicator
+from pymoo.indicators.hv import HV
 
 def compute_hv(objs, ref_point):
     x, hv = ref_point[0], 0.0
@@ -251,16 +260,8 @@ class Monitor(object):
                 Y=torch.Tensor([tot_reward, Rew_1, Rew_2, loss]).unsqueeze(0).cpu(),
                 win=self.value_window,
                 update='append')
-import itertools
 def generate_w_batch_test(reward_num, step_size):
-    mesh_array = []
-    step_size = step_size
-    for i in range(reward_num):
-        mesh_array.append(np.arange(0, 1 + step_size, step_size))
-    w_batch_test = np.array(list(itertools.product(*mesh_array)))
-    w_batch_test = w_batch_test[w_batch_test.sum(axis=1) == 1, :]
-    w_batch_test = np.unique(w_batch_test, axis=0)
-    return w_batch_test
+    return generate_simplex_grid(reward_num, step_size)
 #from population_2d import Population as  Population2d
 from mod_neuro_evo import SSNE
 
@@ -283,7 +284,10 @@ def calculate_discounted_rewards(org_pref, rewards, done, next_value, gamma=0.99
     return discounted_rewards
 
 from model import Conflict_caculate, PCGrad
-from ES import ISODD
+try:
+    from ES import ISODD
+except ImportError:
+    ISODD = None
 import pickle
 class SacAgent:
 
@@ -297,6 +301,10 @@ class SacAgent:
                  pop_size=5,iso_sigma=0.005,line_sigma=0.05,  EA_policy_num=1, warm_steps=10000, RL_policy_num=1, latent_dim=50, reward_coef = 1.0, dynamic_coef = 1.0, value_coef = 1.0, Policy_use_latent=False, Policy_use_s=False, Policy_use_w = False,Critic_use_s = False, Critic_use_a = False, Policy_use_target=False, encoder_update_freq=1,use_avg=False, Critic_use_both=False, use_encoder_hardupdate=False, regular_alpha=0.1, Wandb_name="_", Use_pc_grad=False, step_random=False, old_Q_update_freq=1, regular_bar=0.0, consider_other=True):
 
         self.consider_other = consider_other
+        if per:
+            raise NotImplementedError(
+                "PER is not compatible with vector rewards and preference batches"
+            )
         self.regular_bar = regular_bar
         self.old_Q_update_freq = old_Q_update_freq
         self.step_random =step_random
@@ -333,7 +341,9 @@ class SacAgent:
         self.train_with_fixed_preference= train_with_fixed_preference
 
 
-        self.max_action = self.env.action_space.high
+        self.action_low = np.asarray(self.env.action_space.low, dtype=np.float32)
+        self.action_high = np.asarray(self.env.action_space.high, dtype=np.float32)
+        self.max_action = self.action_high
         self.model_saved_step = model_saved_step
 
         self.save_objs_freq = 0
@@ -342,7 +352,10 @@ class SacAgent:
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)
-        self.env.seed(seed)
+        if hasattr(self.env, "seed"):
+            self.env.seed(seed)
+        else:
+            self.env.reset(seed=seed)
         self.env.action_space.seed(seed)
         random.seed(seed)
         torch.backends.cudnn.deterministic = True  # It harms a performance.
@@ -350,7 +363,10 @@ class SacAgent:
         self.q_frequency = q_frequency
         self.QM = QMonitor()
 
-        self.evolution = ISODD(iso_sigma = self.iso_sigma,line_sigma = self.line_sigma)
+        self.evolution = (
+            ISODD(iso_sigma=self.iso_sigma, line_sigma=self.line_sigma)
+            if ISODD is not None else None
+        )
 
         self.device = torch.device(
             "cuda" if cuda and torch.cuda.is_available() else "cpu")
@@ -406,6 +422,8 @@ class SacAgent:
             hidden_units=hidden_units,Use_Critic_Preference=self.Use_Critic_Preference).to(self.device).eval()
 
         self.old_critic = copy.deepcopy(self.critic)
+        self.old_critic.eval()
+        grad_false(self.old_critic)
 
         # copy parameters of the learning network to the target network
         hard_update(self.critic_target, self.critic)
@@ -419,8 +437,8 @@ class SacAgent:
         self.q2_optim = Adam(self.critic.Q2.parameters(), lr=lr)
 
         if self.Use_pc_grad:
-            self.pc_q1_optim = PCGrad(Adam(self.critic.Q1.parameters(), lr=lr))
-            self.pc_q2_optim = PCGrad(Adam(self.critic.Q2.parameters(), lr=lr))
+            self.pc_q1_optim = PCGrad(self.q1_optim)
+            self.pc_q2_optim = PCGrad(self.q2_optim)
 
         self.conflict_caculates = Conflict_caculate(self.q1_optim)
         self.conflict_caculates_q2 = Conflict_caculate(self.q2_optim)
@@ -441,20 +459,9 @@ class SacAgent:
             # fixed alpha
             self.alpha = torch.tensor(ent_coef).to(self.device)
 
-        if per:
-            # replay memory with prioritied experience replay
-            # See https://github.com/ku2482/rltorch/blob/master/rltorch/memory
-            self.memory = PrioritizedMemory(
-                memory_size, self.env.observation_space.shape,
-                self.env.action_space.shape, self.device, gamma, multi_step,
-                alpha=alpha, beta=beta, beta_annealing=beta_annealing)
-        else:
-
-            # replay memory without prioritied experience replay
-            # See https://github.com/ku2482/rltorch/blob/master/rltorch/memory
-            self.memory = MOMultiStepMemory(
-                memory_size, self.env.observation_space.shape, self.env.reward_num,
-                self.env.action_space.shape, self.device, gamma, multi_step)
+        self.memory = MOMultiStepMemory(
+            memory_size, self.env.observation_space.shape, self.env.reward_num,
+            self.env.action_space.shape, self.device, gamma, multi_step)
 
 
 
@@ -502,7 +509,7 @@ class SacAgent:
 
         self.previous_best_hv = 0
         self.previous_best_ut = 0
-        self.previous_save = -100000
+        self.previous_save = 0
 
         self.record_steps = 0
         self.learning_steps = 0
@@ -539,10 +546,9 @@ class SacAgent:
 
 
     def get_pref(self):
-        preference = np.random.rand( self.env.reward_num)
-        preference = preference.astype(np.float32)
-        preference /= preference.sum()
-        return preference
+        return np.random.dirichlet(
+            np.ones(self.env.reward_num, dtype=np.float64)
+        ).astype(np.float32)
 
 
     def run(self,our_wandb):
@@ -556,11 +562,28 @@ class SacAgent:
         return len(self.memory) > self.batch_size and\
             self.steps >= self.start_steps
 
+    def _reset_env(self):
+        result = self.env.reset()
+        if isinstance(result, tuple) and len(result) == 2:
+            return result[0]
+        return result
+
+    def _step_env(self, action):
+        result = self.env.step(action)
+        if not isinstance(result, tuple):
+            raise TypeError("env.step() must return a tuple")
+        if len(result) == 5:
+            next_state, reward, terminated, truncated, info = result
+            return next_state, reward, bool(terminated or truncated), info
+        if len(result) == 4:
+            return result
+        raise TypeError("env.step() must return a Gym 4-tuple or Gymnasium 5-tuple")
+
 
     def evluate(self, preference, policy, RL_agent=False):
 
         episode_steps = 0
-        state = self.env.reset()
+        state = self._reset_env()
         done = False
         episode_reward = 0.
 
@@ -594,7 +617,9 @@ class SacAgent:
             action =action.cpu().numpy().reshape(-1)
 
             # action = self.act(state)
-            next_state, reward, done, _ = self.env.step(action * self.max_action)
+            next_state, reward, done, _ = self._step_env(
+                scale_action(action, self.action_low, self.action_high)
+            )
             self.steps += 1
             episode_steps += 1
             episode_reward += reward
@@ -713,17 +738,11 @@ class SacAgent:
             next_q1, next_q2 = self.critic_target(critic_input, preference, preference)
             
             #We choose argmin_Q (ωTQ)
-            w_q1 = torch.einsum('ij,j->i',[next_q1, preference[0] ])
-            w_q2 = torch.einsum('ij,j->i',[next_q2, preference[0] ])
-            mask = torch.lt(w_q1,w_q2)
-            mask = mask.repeat([1,self.env.reward_num])
-            mask = torch.reshape(mask, next_q1.shape)
-
-            minq = torch.where( mask, next_q1, next_q2)
+            minq = select_min_q_vectors(next_q1, next_q2, preference)
                 
             next_q = minq + self.alpha * next_entropies
 
-        target_q = rewards + (1.0 - dones) * self.gamma_n * next_q
+        target_q = self.reward_coef * rewards + (1.0 - dones) * self.gamma_n * next_q
 
         return target_q
 
@@ -930,7 +949,9 @@ class SacAgent:
             preference = fixed_preference
         else:
             preference = self.get_pref()
-        preference = torch.FloatTensor(preference, device=self.device)
+        preference = torch.as_tensor(
+            preference, dtype=torch.float32, device=self.device
+        )
         for _ in range(10):
             PREF_SET = []
 
@@ -1034,7 +1055,7 @@ class SacAgent:
         dynamic_loss = torch.mean((pre_next_latent - next_latent_target).pow(2))
 
         self.latent_encoder_optim.zero_grad()
-        dynamic_loss.backward()
+        (self.dynamic_coef * dynamic_loss).backward()
         self.latent_encoder_optim.step()
         new_latent = self.latent_encoder.get_latent_features(states).detach()
 
@@ -1044,8 +1065,16 @@ class SacAgent:
             second_q1_loss, second_q2_loss, _, _, _ = self.calc_critic_loss( new_latent, batch, weights, random_preference,PREF_SET, best_policy,best_policy_weight)
             self.pc_q1_optim.zero_grad()
             self.pc_q2_optim.zero_grad()
-            self.pc_q1_optim.pc_backward([q1_loss, second_q1_loss])
-            self.pc_q2_optim.pc_backward([q2_loss, second_q2_loss])
+            self.pc_q1_optim.pc_backward([
+                self.value_coef * q1_loss,
+                self.value_coef * second_q1_loss,
+            ])
+            self.pc_q2_optim.pc_backward([
+                self.value_coef * q2_loss,
+                self.value_coef * second_q2_loss,
+            ])
+            self.pc_q1_optim.step()
+            self.pc_q2_optim.step()
         else :
             total_loss = self.value_coef * (q1_loss + q2_loss)
             self.q1_optim.zero_grad()
@@ -1105,7 +1134,7 @@ class SacAgent:
 
         states, _, actions, rewards, next_states, dones = batch
 
-        D_pref = preference.repeat(self.batch_size,1)
+        D_pref = preference.repeat(states.shape[0], 1)
 
 
         curr_q1, curr_q2= self.calc_current_q( s_z, states, D_pref, actions, rewards, next_states, dones)
@@ -1122,9 +1151,10 @@ class SacAgent:
         q2_loss = torch.mean(torch.tensordot((curr_q2 - target_q).pow(2), preference,dims=1) * weights)
 
 
-        sampled_preference_without_repeat = torch.tensor(self.get_pref(), device=self.device)
-        sampled_preference = torch.tensor(sampled_preference_without_repeat, device=self.device).repeat(states.shape[0],
-                                                                                                        1)
+        sampled_preference_without_repeat = torch.as_tensor(
+            self.get_pref(), device=self.device, dtype=preference.dtype
+        )
+        sampled_preference = sampled_preference_without_repeat.repeat(states.shape[0], 1)
         sampled_curr_q1, sampled_curr_q2 = self.calc_current_q(s_z, states, sampled_preference, actions, rewards,
                                                                next_states, dones)
 
@@ -1143,18 +1173,18 @@ class SacAgent:
         sampled_td_error_2 = torch.mean(torch.tensordot((sampled_curr_q2 - sampled_target_q).pow(2), sampled_preference_without_repeat,dims=1) * weights)
 
         grads_Q1, shapes = self.conflict_caculates.get_gardients_vector([sampled_td_error_1, q1_loss])
-        shapes = shapes[0]
-        the_third_start = shapes[0][0] * shapes[0][1] + shapes[1][0] + shapes[2][0] * shapes[2][1] + shapes[3][0]
-        the_third_end = shapes[0][0] * shapes[0][1] + shapes[1][0] + shapes[2][0] * shapes[2][1] + shapes[3][0] + shapes[4][0] * shapes[4][1] + shapes[5][0]
-
         grads_Q2, _ = self.conflict_caculates_q2.get_gardients_vector([sampled_td_error_2, q2_loss])
 
-        stiffness_Q1 = self.conflict_caculates.get_stiffness([grads_Q1[0][the_third_start: the_third_end], grads_Q1[1][the_third_start: the_third_end]])
-        stiffness_Q2 = self.conflict_caculates_q2.get_stiffness([grads_Q2[0][the_third_start: the_third_end], grads_Q2[1][the_third_start: the_third_end]])
+        stiffness_Q1 = self.conflict_caculates.get_stiffness(grads_Q1)
+        stiffness_Q2 = self.conflict_caculates_q2.get_stiffness(grads_Q2)
 
 
-        q1_total_loss = q1_loss + max(self.regular_bar - stiffness_Q1, 0.0) * self.regular_alpha * regular_q1
-        q2_total_loss = q2_loss + max(self.regular_bar - stiffness_Q2, 0.0) * self.regular_alpha * regular_q2
+        q1_total_loss = q1_loss + torch.clamp(
+            self.regular_bar - stiffness_Q1, min=0.0
+        ) * self.regular_alpha * regular_q1
+        q2_total_loss = q2_loss + torch.clamp(
+            self.regular_bar - stiffness_Q2, min=0.0
+        ) * self.regular_alpha * regular_q2
 
         return q1_total_loss, q2_total_loss, errors, mean_q1, mean_q2
 
@@ -1214,29 +1244,38 @@ class SacAgent:
 
 
 
-    def calc_policy_loss(self, current_latent,  batch, weights, preference, PREF):
+    def calc_one_policy_loss(self, batch, policy, preference, PREF):
+        states = batch[0]
+        current_latent = self.latent_encoder.get_latent_features(states).detach()
+        policy_loss, _ = self.calc_policy_loss(
+            current_latent, batch, 1.0, preference, PREF, policy=policy
+        )
+        return policy_loss
+
+    def calc_policy_loss(
+            self, current_latent, batch, weights, preference, PREF, policy=None):
         start = time.time()
         states, _, actions, rewards, next_states, dones = batch
-        preference_batch = preference.repeat(self.batch_size, 1)
-        
-        losses = []
+        policy = self.policy if policy is None else policy
+        batch_size = states.shape[0]
+        preference_batch = preference.repeat(batch_size, 1)
+        scalarized_q_candidates = []
 
-        c_cnt = 0
+        if self.Policy_use_latent:
+            policy_input = current_latent
+            if self.Policy_use_s:
+                policy_input = torch.cat([policy_input, states], -1)
+            if self.Policy_use_w:
+                policy_input = torch.cat([policy_input, preference_batch], -1)
+        else:
+            policy_input = torch.cat([states, preference_batch], -1)
+        sampled_action, entropy, _ = policy.sample(policy_input)
+
         for a, c in enumerate([ self.critic]+self.Q_memory.sample() ): # Use critic from Q Replay Buffer
             for b, i in enumerate(PREF): #Get Q from preference set W
-                p_batch = torch.tensor(i, device = self.device).repeat(self.batch_size, 1)
-
-                if self.Policy_use_latent:
-                    input = current_latent
-                    if self.Policy_use_s:
-                        input = torch.cat([input, states], -1)
-                    if self.Policy_use_w:
-                        input = torch.cat([input, p_batch], -1)
-                    sampled_action, entropy, _ = self.policy.sample(input)
-                else :
-                    sampled_action, entropy, _ = self.policy.sample(torch.cat([states, p_batch],-1))
-                if a == 0 and b == 0:
-                    e = entropy
+                p_batch = torch.as_tensor(
+                    i, device=self.device, dtype=preference.dtype
+                ).repeat(batch_size, 1)
 
 
                 sa_z = self.latent_encoder.get_dynamic(current_latent, sampled_action)
@@ -1249,33 +1288,22 @@ class SacAgent:
                 if self.Critic_use_a:
                     critic_input = torch.cat([critic_input, sampled_action], -1)
 
-                q1, q2 = c(critic_input, preference_batch, preference_batch)
+                q1, q2 = c(critic_input, p_batch, p_batch)
                 
                 q1 = torch.tensordot(q1, preference, dims = 1)
                 q2 = torch.tensordot(q2, preference, dims = 1)
                 q = torch.min(q1, q2)
                 
-                l = - q - self.alpha * entropy
-                losses.append(l)
+                scalarized_q_candidates.append(q)
 
-        losses = torch.stack(losses, dim = 1)
-        policy_loss, idx =  torch.min(losses, 1)
-        ll=idx.detach().cpu()[:,0].tolist()
+        scalarized_q_candidates = torch.stack(scalarized_q_candidates, dim=1)
+        losses = envelope_actor_loss_candidates(
+            scalarized_q_candidates, entropy, self.alpha.detach()
+        )
+        policy_loss, _ = torch.min(losses, dim=1)
         policy_loss = torch.mean(policy_loss)
 
-        if self.Policy_use_latent:
-            input = current_latent
-            if self.Policy_use_s:
-                input = torch.cat([input, states], -1)
-            if self.Policy_use_w:
-                input = torch.cat([input, preference_batch], -1)
-            sampled_action, e, _ = self.policy.sample(input)
-        else:
-            sampled_action, e, _ = self.policy.sample(torch.cat([states, preference_batch], -1))
-
-#        sampled_action, e, _ = self.policy.sample(states, preference_batch)
-
-        return policy_loss, e
+        return policy_loss, entropy
 
     def calc_entropy_loss(self, entropy, weights):
         # Intuitively, we increse alpha when entropy is less than target
@@ -1324,14 +1352,16 @@ class SacAgent:
                 # evalPreference = FloatTensor(evalPreference)
                 # reset the environment
                 eval_Pre = evalPreference
-                state = self.env.reset()
+                state = self._reset_env()
                 terminal = False
                 tot_rewards = 0
                 cnt = 0
                 one_ep_u_reward = 0
                 while not terminal:
                     action = self.exploit(state, evalPreference)
-                    next_state, reward, terminal, _ = self.env.step(action*self.max_action)
+                    next_state, reward, terminal, _ = self._step_env(
+                        scale_action(action, self.action_low, self.action_high)
+                    )
                     tot_rewards += reward
                     state = next_state
                     cnt += 1
@@ -1346,7 +1376,7 @@ class SacAgent:
             #print("first hv:", compute_hv(temp_objs, self.ref_point))
 
             # np.zeros((self.env.reward_num))
-            perf_ind = get_performance_indicator("hv", ref_point=-np.array(self.ref_point))
+            perf_ind = HV(ref_point=-np.array(self.ref_point))
             print("test ",np.array(self.ref_point).shape, recovered_objs.shape )
             
             hv = perf_ind.do(-recovered_objs)
@@ -1377,12 +1407,14 @@ class SacAgent:
                 # reset the environment
 
                 eval_Pre = evalPreference
-                state = self.env.reset()
+                state = self._reset_env()
                 terminal = False
                 tot_rewards = 0
                 while not terminal:
                     action = self.exploit(state, evalPreference)
-                    next_state, reward, terminal, _ = self.env.step(action*self.max_action)
+                    next_state, reward, terminal, _ = self._step_env(
+                        scale_action(action, self.action_low, self.action_high)
+                    )
                     tot_rewards += reward
                     state = next_state
                 #    one_ep_u_reward += np.dot(reward , eval_Pre)

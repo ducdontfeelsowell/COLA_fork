@@ -3,8 +3,8 @@
 # running speed, energy efficiency
 
 import numpy as np
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from environments.mujoco_compat import mujoco_env
 from os import path
 
 class HalfCheetahEnv(mujoco_env.MujocoEnv, utils.EzPickle):
@@ -35,9 +35,9 @@ class HalfCheetahEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         reward_run_x = 0.5*(xposafter - xposbefore)/self.dt +alive_bonus
         reward_jump = 20 * (height - self.init_qpos[1]) + alive_bonus
-        reward_energy_1 = 4.0 - 3.0 * np.square([action[0], action[3]]).mean() + alive_bonus
-        reward_energy_2 = 4.0 - 3.0 * np.square(action[1:3]).mean() + alive_bonus
-        reward_energy_3 = 4.0 - 3.0 * np.square(action[3:5]).mean() + alive_bonus
+        reward_energy_1 = 4.0 - 3.0 * np.square(action[0:2]).mean() + alive_bonus
+        reward_energy_2 = 4.0 - 3.0 * np.square(action[2:4]).mean() + alive_bonus
+        reward_energy_3 = 4.0 - 3.0 * np.square(action[4:6]).mean() + alive_bonus
         done = not (abs(ang) < np.deg2rad(50))
         # if self.steps > self._max_episode_steps:
         #     done = True

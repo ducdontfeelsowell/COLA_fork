@@ -1,11 +1,21 @@
 import random
 import numpy as np
 from typing import List
-import fastrand, math
+import math
 import torch
 import torch.distributions as dist
 from mod_utils import is_lnorm_key
 import os
+
+try:
+    import fastrand
+except ImportError:
+    class _FastRandFallback:
+        @staticmethod
+        def pcg32bounded(upper_bound):
+            return random.randrange(upper_bound)
+
+    fastrand = _FastRandFallback()
 
 
 class SSNE:

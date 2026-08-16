@@ -9,12 +9,11 @@ os.environ ['OPENBLAS_NUM_THREADS'] = str(cpu_num)
 os.environ ['MKL_NUM_THREADS'] = str(cpu_num)
 os.environ ['VECLIB_MAXIMUM_THREADS'] = str(cpu_num)
 os.environ ['NUMEXPR_NUM_THREADS'] = str(cpu_num)
-#os.environ["WANDB_API_KEY"] = "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"
 os.environ["WANDB_MODE"] = "offline"
 torch.set_num_threads(cpu_num)
 import argparse
 from datetime import datetime
-import gym
+import gymnasium as gym
 import numpy as np
 import random
 
@@ -27,7 +26,7 @@ from environments.non_stationary import (
 from agent import SacAgent
 def run():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env_id', type=str, default='dst_d-v0')
+    parser.add_argument('--env_id', type=str, default='MO-Ant-v2')
     parser.add_argument('--cuda', dest="use_cuda", action='store_true', default=True, help="use CUDA (default: True)")
     parser.add_argument('--no-cuda', dest="use_cuda", action='store_false', help="disable CUDA (force CPU)")
 
@@ -55,6 +54,7 @@ def run():
     parser.add_argument('--pop_size', type=int, default=4)
     parser.add_argument('--cuda_device', type=int, default=0, help="GPU device (default: 0). Use -1 to disable")
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--num_steps', type=int, default=3000000)
     parser.add_argument('--prefer', type=int, default=0)
     parser.add_argument('--buf_num', type=int, default=0)
     parser.add_argument('--q_freq', type=int, default=1000)
@@ -104,7 +104,7 @@ def run():
 
     # You can define configs in the external json or yaml file.
     configs = {
-        'num_steps': 500000, #originally: 8 m
+        'num_steps': args.num_steps,
         'batch_size': 256,#256
         'lr': 0.0003,
         'hidden_units': [256, 256],

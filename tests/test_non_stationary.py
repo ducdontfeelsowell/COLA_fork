@@ -1,7 +1,7 @@
 import argparse
 import unittest
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 from environments.non_stationary import (
@@ -339,6 +339,28 @@ class NonStationaryEnvTests(unittest.TestCase):
         _, reward, _, _ = wrapper.step(0)
         self.assertEqual(wrapper.elapsed_steps, 3)
         self.assertEqual(reward, 20.0)
+
+    def test_suspended_updates_hold_regime_and_scheduler_clock(self):
+        wrapper = NonStationaryEnv(
+            DummyEnv(),
+            parameter_paths="gain",
+            degree_distribution=2.0,
+            interval_distribution=1,
+            seed=53,
+            reset_schedule_on_env_reset=True,
+        )
+
+        with wrapper.suspend_updates():
+            for _ in range(4):
+                wrapper.reset()
+                _, reward, _, info = wrapper.step(0)
+                self.assertEqual(reward, 10.0)
+                self.assertNotIn("non_stationary_update", info)
+
+        self.assertEqual(wrapper.elapsed_steps, 0)
+        _, reward, _, info = wrapper.step(0)
+        self.assertEqual(reward, 20.0)
+        self.assertEqual(info["non_stationary_update"]["step"], 1)
 
 
 if __name__ == "__main__":

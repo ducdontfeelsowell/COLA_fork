@@ -3,8 +3,8 @@
 # running speed, energy efficiency
 
 import numpy as np
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from environments.mujoco_compat import mujoco_env
 from os import path
 
 class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):

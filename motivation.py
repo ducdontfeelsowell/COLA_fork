@@ -9,12 +9,11 @@ os.environ ['OPENBLAS_NUM_THREADS'] = str(cpu_num)
 os.environ ['MKL_NUM_THREADS'] = str(cpu_num)
 os.environ ['VECLIB_MAXIMUM_THREADS'] = str(cpu_num)
 os.environ ['NUMEXPR_NUM_THREADS'] = str(cpu_num)
-os.environ["WANDB_API_KEY"] = "b26af16f098a021f99a7de6c84df44c8a5728033"
 os.environ["WANDB_MODE"] = "offline"
 torch.set_num_threads(cpu_num)
 import argparse
 from datetime import datetime
-import gym
+import gymnasium as gym
 import numpy as np
 import random
 
@@ -23,7 +22,7 @@ from environments import *
 from motivation_agent import SacAgent
 def run():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env_id', type=str, default='dst_d-v0')
+    parser.add_argument('--env_id', type=str, default='MO-Ant-v2')
     parser.add_argument('--cuda', action='store_true', default=False)
 
     parser.add_argument('--Use_Policy_Preference', action='store_true', default=False)

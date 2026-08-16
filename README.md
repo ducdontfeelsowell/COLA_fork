@@ -28,13 +28,14 @@ We recommend using Conda.
 git clone <your-repo-url>
 cd COLA
 
-# Option A: create from provided environment file
-conda env create -f environment.yml
-conda activate cola
+# Option A: create the tested Windows/CPU environment
+conda env create --solver libmamba -f environmentV2.yml
+conda activate cola38
 
 # Option B: create a fresh env (example)
-conda create -n cola python=3.10 -y
-conda activate cola
+conda create -n cola38 python=3.8 -y
+conda activate cola38
+# Install PyTorch 1.13.1 first, then:
 pip install -r requirements.txt
 ```
 
@@ -66,8 +67,8 @@ Each task runs for 500 steps per episode, with objectives including forward/axis
 
 ## Non-stationary environments
 
-`NonStationaryEnv` can wrap any existing Gym environment and change one or
-more core parameters at randomized global time steps. It uses only Gym and
+`NonStationaryEnv` can wrap any existing Gymnasium environment and change one or
+more core parameters at randomized global time steps. It uses only Gymnasium and
 NumPy already pinned in `environmentV2.yml`. For example, the following changes
 all Ant body masses to between 80% and 120% of their original values every
 100--500 steps:
@@ -101,7 +102,7 @@ degree. Omitting `--non-stationary` preserves the original stationary training
 path. The equivalent Python API is:
 
 ```python
-import gym
+import gymnasium as gym
 import numpy as np
 
 from environments import NonStationaryEnv
@@ -205,7 +206,7 @@ During training/evaluation we use preference grids to cover the space and report
 - Typical preference step sizes (per paper):  
   - 2-objective: `0.005`  
   - 3-objective: `0.05`  
-  - 4-objective: `0.2`  
+  - 4-objective: `0.1`
   - 5-objective: `0.2`
   
 More details can be found in the Appendix of paper.

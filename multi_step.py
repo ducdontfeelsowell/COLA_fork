@@ -4,7 +4,7 @@ from base import MOMemory
 
 
 class MultiStepBuff:
-    keys = ["state", "action", "reward"]
+    keys = ["state", "preference", "action", "reward"]
 
     def __init__(self, maxlen=3):
         super(MultiStepBuff, self).__init__()
@@ -18,10 +18,11 @@ class MultiStepBuff:
         self.memory["state"].append(state)
         self.memory["preference"].append(preference)
         self.memory["action"].append(action)
-        self.memory["reward"].append(reward)
+        self.memory["reward"].append(np.asarray(reward, dtype=np.float32))
 
     def get(self, gamma=0.99):
-        assert len(self) == self.maxlen
+        if len(self) == 0:
+            raise IndexError("cannot read from an empty MultiStepBuff")
         reward = self._multi_step_reward(gamma)
         preference = self.memory["preference"].popleft()
         state = self.memory["state"].popleft()
@@ -32,7 +33,7 @@ class MultiStepBuff:
     def _multi_step_reward(self, gamma):
         return np.sum([
             r * (gamma ** i) for i, r
-            in enumerate(self.memory["reward"])])
+            in enumerate(self.memory["reward"])], axis=0)
 
     def __getitem__(self, key):
         if key not in self.keys:
@@ -69,6 +70,12 @@ class MOMultiStepMemory(MOMemory):
                 self._append(state, preference, action, reward, next_state, done)
 
             if episode_done or done:
+                # Preserve the shorter n-step returns at the end of an episode.
+                # The full-length item above has already popped the first entry.
+                while len(self.buff) > 0:
+                    state, preference, action, reward = self.buff.get(self.gamma)
+                    self._append(
+                        state, preference, action, reward, next_state, done)
                 self.buff.reset()
         else:
             self._append(state, preference, action, reward, next_state, done)

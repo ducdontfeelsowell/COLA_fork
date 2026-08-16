@@ -1,10 +1,31 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.distributions import Normal
-from rltorch.network import create_linear_network
 import os
 import copy
 import random
+
+
+def create_linear_network(
+        input_dim, output_dim, hidden_units=(256, 256), initializer='xavier'):
+    """Build the MLPs locally instead of depending on the unmaintained rltorch."""
+    layers = []
+    previous_dim = input_dim
+    for hidden_dim in hidden_units:
+        linear = nn.Linear(previous_dim, hidden_dim)
+        if initializer == 'xavier':
+            nn.init.xavier_uniform_(linear.weight)
+            nn.init.zeros_(linear.bias)
+        layers.extend((linear, nn.ReLU()))
+        previous_dim = hidden_dim
+
+    output = nn.Linear(previous_dim, output_dim)
+    if initializer == 'xavier':
+        nn.init.xavier_uniform_(output.weight)
+        nn.init.zeros_(output.bias)
+    layers.append(output)
+    return nn.Sequential(*layers)
 
 class PCGrad():
     def __init__(self, optimizer, reduction='mean'):
@@ -51,16 +72,17 @@ class PCGrad():
             for g_j in grads:
                 g_i_g_j = torch.dot(g_i, g_j)
                 if g_i_g_j < 0:
-                    g_i -= (g_i_g_j) * g_j / (g_j.norm() ** 2)
+                    denominator = g_j.norm().pow(2).clamp_min(1e-12)
+                    g_i -= (g_i_g_j) * g_j / denominator
         merged_grad = torch.zeros_like(grads[0]).to(grads[0].device)
-        if self._reduction:
+        if self._reduction == 'mean':
             merged_grad[shared] = torch.stack([g[shared]
                                                for g in pc_grad]).mean(dim=0)
         elif self._reduction == 'sum':
             merged_grad[shared] = torch.stack([g[shared]
                                                for g in pc_grad]).sum(dim=0)
         else:
-            exit('invalid reduction method')
+            raise ValueError('reduction must be either "mean" or "sum"')
 
         merged_grad[~shared] = torch.stack([g[~shared]
                                             for g in pc_grad]).sum(dim=0)
@@ -102,7 +124,7 @@ class PCGrad():
     def _unflatten_grad(self, grads, shapes):
         unflatten_grad, idx = [], 0
         for shape in shapes:
-            length = np.prod(shape)
+            length = int(np.prod(shape))
             unflatten_grad.append(grads[idx:idx + length].view(shape).clone())
             idx += length
         return unflatten_grad
@@ -196,7 +218,8 @@ class Conflict_caculate():
         #pc_grad = self._unflatten_grad(pc_grad, shapes[0])
         #self._set_grad(pc_grad)
 
-        return torch.dot(grads_0, grads_1)/(grads_0.norm()*grads_1.norm())
+        denominator = (grads_0.norm() * grads_1.norm()).clamp_min(1e-12)
+        return torch.dot(grads_0, grads_1) / denominator
 
 
 
@@ -209,16 +232,17 @@ class Conflict_caculate():
             for g_j in grads:
                 g_i_g_j = torch.dot(g_i, g_j)
                 if g_i_g_j < 0:
-                    g_i -= (g_i_g_j) * g_j / (g_j.norm() ** 2)
+                    denominator = g_j.norm().pow(2).clamp_min(1e-12)
+                    g_i -= (g_i_g_j) * g_j / denominator
         merged_grad = torch.zeros_like(grads[0]).to(grads[0].device)
-        if self._reduction:
+        if self._reduction == 'mean':
             merged_grad[shared] = torch.stack([g[shared]
                                                for g in pc_grad]).mean(dim=0)
         elif self._reduction == 'sum':
             merged_grad[shared] = torch.stack([g[shared]
                                                for g in pc_grad]).sum(dim=0)
         else:
-            exit('invalid reduction method')
+            raise ValueError('reduction must be either "mean" or "sum"')
 
         merged_grad[~shared] = torch.stack([g[~shared]
                                             for g in pc_grad]).sum(dim=0)
@@ -263,14 +287,10 @@ class Conflict_caculate():
 
     def _unflatten_grad(self, grads, shapes):
         unflatten_grad, idx = [], 0
-
-        for grad in grads:
-            for shape in shapes:
-                length = np.prod(shape).astype(np.int32)
-
-                #print("???", idx,length, shape)
-                unflatten_grad.append(grads[idx:idx + length].view(shape).clone())
-                idx += length
+        for shape in shapes:
+            length = int(np.prod(shape))
+            unflatten_grad.append(grads[idx:idx + length].view(shape).clone())
+            idx += length
         return unflatten_grad
 
     def _flatten_grad(self, grads, shapes):
@@ -319,7 +339,12 @@ class QNetwork(BaseNetwork):
 
         # https://github.com/ku2482/rltorch/blob/master/rltorch/network/builder.py
 
-        self.Q = nn.Sequential(nn.Linear(latent_dim+num_actions, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, num_weights))
+        self.Q = create_linear_network(
+            latent_dim + num_actions,
+            num_weights,
+            hidden_units=hidden_units,
+            initializer=initializer,
+        )
 
     def forward(self, x):
         q = self.Q(x)
@@ -364,9 +389,19 @@ class Latent_Encoder(BaseNetwork):  # Critic
         super(Latent_Encoder, self).__init__()
 
         self.use_avg = use_avg
-        self.z_encoder = nn.Sequential(*[nn.Linear(state_dim_with_weights, 256), nn.ELU(),  nn.Linear(256, latent_dim)])
+        self.z_encoder = nn.Sequential(
+            nn.Linear(state_dim_with_weights, 256),
+            nn.ReLU(),
+            nn.Linear(256, latent_dim),
+        )
 
-        self.z_dynamic_pre = nn.Sequential(nn.Linear(latent_dim + num_actions, 256), nn.ELU(), nn.Linear(256, 256), nn.ELU(),nn.Linear(256, latent_dim))
+        self.z_dynamic_pre = nn.Sequential(
+            nn.Linear(latent_dim + num_actions, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, latent_dim),
+        )
 
     def get_latent_features(self, states_weights):
         if self.use_avg:
@@ -427,8 +462,7 @@ import math
 def is_lnorm_key(key):
     return key.startswith('lnorm')
 def to_numpy(var):
-    return var.data.numpy()
-import numpy as np
+    return var.detach().cpu().numpy()
 
 
 class GaussianPolicy(BaseNetwork):#Policy
@@ -536,7 +570,7 @@ class GaussianPolicy(BaseNetwork):#Policy
         """
         cpt = 0
         for param in self.parameters():
-            tmp = np.product(param.size())
+            tmp = int(np.prod(param.size()))
 
             # if torch.cuda.is_available():
             #     param.data.copy_(torch.from_numpy(

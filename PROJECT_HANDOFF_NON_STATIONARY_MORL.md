@@ -149,13 +149,12 @@ flowchart LR
 - Creates the base task with `gym.make(args.env_id)` and conditionally wraps it
   through `wrap_environment_from_args(...)`.
 - Builds a configuration dictionary and starts `SacAgent.run(...)`.
-- Uses 500,000 environment steps in the current configuration, a replay size of
+- Uses 3,000,000 environment steps by default (overridable with `--num_steps`), a replay size of
   one million, batch size 256, learning rate $3\times10^{-4}$, and 10,000
   initial exploration steps.
 
-The current default `env_id` is `dst_d-v0`, which is not registered by the
-included `environments/__init__.py`; practical runs use an explicit MuJoCo ID
-from `run.sh`.
+The current default `env_id` is the registered `MO-Ant-v2`; `run.sh` provides
+the full task-specific experiment commands.
 
 ### 4.2 Agent and training loop
 
@@ -272,9 +271,10 @@ Importing `environments` registers the following main tasks:
 | `MO-Swimmer-v2` | forward motion and control efficiency | 500 |
 | `MO-Humanoid-v2` | running and energy | 1000 |
 | `MO-Humanoid-v5` | five grouped energy objectives; speed is retained in `info` | 1000 |
+| `MO-Ant-v5000` | long-horizon Ant variant | 5000 |
 
-`MO-Humanoid-v6` is registered, but `environments/humanoid_v6.py` is absent.
-The README also uses some `-2d`/`-3d` names that do not match the actual Gym
+The invalid `MO-Humanoid-v6` registration was removed because its source file
+does not exist. The README also uses some `-2d`/`-3d` names that do not match the actual Gym
 registration IDs. For continuation work, `environments/__init__.py` and
 `run.sh` are the authoritative sources.
 
@@ -503,14 +503,14 @@ Treat `environmentV2.yml` as the requested target constraint:
 - SciPy 1.7.3
 - PyTorch 1.13.1 / CUDA 11.7
 - pymoo 0.6.0
-- W&B, TensorBoard, Visdom, and `rltorch`
+- W&B, TensorBoard, and Visdom
 
 The new wrapper uses only Gym and NumPy, so it adds no dependency.
 
 There are two environment specifications with important differences:
 
-- `environmentV2.yml` is the newer requested constraint but does **not** list
-  `mujoco-py` explicitly.
+- `environmentV2.yml` is the newer requested constraint and now lists
+  `mujoco-py==2.0.2.9` and `fastrand==1.8.0` explicitly.
 - `environment.yml` is an older Python 3.7 / PyTorch 1.3.1 environment and does
   list `mujoco-py==2.0.2.9` plus system-era dependencies.
 
@@ -544,21 +544,12 @@ The following items are not yet solved:
 7. **Change safety:** broad scales on mass, friction, gravity, damping, or gear
    can destabilize MuJoCo. Experiments should use positive bounded
    distributions and environment-specific ranges.
-8. **Missing registration target:** `MO-Humanoid-v6` points to a nonexistent
-   source file.
-9. **Documentation/ID mismatch:** some README examples use IDs not registered by
+8. **Documentation/ID mismatch:** some README examples use IDs not registered by
    the package. Use `run.sh` and `environments/__init__.py` for valid names.
-10. **Dormant code issues:** `MultiStepBuff.keys` omits `preference` even though
-    the class accesses it, and `MOMemory._insert` references an undefined
-    `preferences` variable. The active configuration uses one-step replay and
-    does not normally hit these paths.
-11. **Partially inactive configuration knobs:** `reward_coef` and
-    `dynamic_coef` are stored by `SacAgent` but are not applied to the current
-    losses; `value_coef` is applied to critic loss. Review intended equations
-    before relying on these flags.
-12. **Higher-dimensional population behavior:** `Population2d` is constructed
-    for every reward dimension, but its angular performance-buffer logic is
-    fundamentally two-dimensional.
+
+The 2026-08-16 logic-fix pass resolved the former n-step/preference replay bugs,
+applied all three loss coefficients, removed the invalid Humanoid registration,
+and added multi-dimensional reference directions to the population buffer.
 
 ## 11. Recommended next steps
 

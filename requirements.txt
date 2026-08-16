@@ -1,8 +1,8 @@
-python==3.8
-pip==23.1.2
-pytorch==1.13.1
-pytorch-cuda==11.7
-gym==0.15.3
+# Python and PyTorch are managed by environmentV2.yml; this file contains
+# packages installed by pip inside that environment.
+gymnasium==0.29.1
+mujoco==2.3.3
+imageio==2.35.1
 cython==0.29.35
 numpy==1.21.6
 scipy==1.7.3
@@ -11,5 +11,4 @@ opencv-python==4.7.0.72
 matplotlib==3.5.3
 tensorboard==2.11.2
 wandb==0.18.7
-git+https://github.com/ku2482/rltorch
 visdom==0.2.4
